@@ -579,7 +579,7 @@ class ViewerApp:
         # Cursor-following hover tooltip (shown over plots)
         with dpg.window(tag="hover_win", label="##hover", show=False, no_title_bar=True,
                         no_move=True, no_resize=True, no_collapse=True, no_close=True,
-                        no_focus_on_appearing=True, no_bring_to_front_on_focus=True,
+                        no_focus_on_appearing=True,
                         autosize=True, no_scrollbar=True):
             dpg.add_text("", tag="hover_text", color=(240, 240, 240, 255))
 
@@ -752,6 +752,7 @@ class ViewerApp:
             dpg.set_item_pos("hover_win", (mouse[0] + 14, mouse[1] + 14))
             if not dpg.get_item_configuration("hover_win")["show"]:
                 dpg.configure_item("hover_win", show=True)
+            dpg.focus_item("hover_win")
             shown = True
             break
         if not shown and dpg.get_item_configuration("hover_win")["show"]:
