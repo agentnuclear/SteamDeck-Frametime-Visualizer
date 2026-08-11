@@ -520,6 +520,7 @@ class ViewerApp:
         self.report_points = []
         self.dq_notes = []
         self.load_counter = 0
+        self.hover_plots = []
 
         dpg.create_context()
         dpg.create_viewport(title="Frametime Visualizer (Steam Deck / MangoHud)", width=1500, height=950)
@@ -532,7 +533,9 @@ class ViewerApp:
 
         dpg.setup_dearpygui()
         dpg.show_viewport()
-        dpg.start_dearpygui()
+        while dpg.is_dearpygui_running():
+            self._hover_tick()
+            dpg.render_dearpygui_frame()
         dpg.destroy_context()
 
     # ------------------------------------------------------------------
@@ -572,6 +575,13 @@ class ViewerApp:
                         pos=(1015, 30), show=True):
             with dpg.child_window(tag="summary_body", width=0, height=0):
                 dpg.add_text("No data.", tag="summary_empty")
+
+        # Cursor-following hover tooltip (shown over plots)
+        with dpg.window(tag="hover_win", label="##hover", show=False, no_title_bar=True,
+                        no_move=True, no_resize=True, no_collapse=True, no_close=True,
+                        no_focus_on_appearing=True, no_bring_to_front_on_focus=True,
+                        autosize=True, no_scrollbar=True):
+            dpg.add_text("", tag="hover_text", color=(240, 240, 240, 255))
 
         with dpg.file_dialog(directory_selector=False, show=False, callback=self._on_open_log,
                              tag="fd_log", width=760, height=480, label="Open frametime log CSV") as fd:
@@ -676,9 +686,84 @@ class ViewerApp:
         dpg.set_value("status_text", "ERROR: %s" % msg.splitlines()[0])
         print(msg, file=sys.stderr)
 
+    # ------------------------------------------------------------------
+    # Hover tooltip (cursor-following value readout over plots)
+    # ------------------------------------------------------------------
+    def _add_hover(self, plot, xa, xfmt, series):
+        """Register a plot for hover readout.
+
+        series: list of dicts {label, x, y, fmt} (fmt uses % formatting).
+        """
+        if series:
+            self.hover_plots.append({
+                "plot": plot,
+                "xa": xa,
+                "xfmt": xfmt,
+                "series": list(series),
+            })
+
+    def _hover_tick(self):
+        if not self.hover_plots:
+            return
+        shown = False
+        mouse = dpg.get_mouse_pos()
+        for entry in self.hover_plots:
+            try:
+                rmin = dpg.get_item_rect_min(entry["plot"])
+                rmax = dpg.get_item_rect_max(entry["plot"])
+            except Exception:
+                continue
+            if not (rmin and rmax):
+                continue
+            if not (rmin[0] <= mouse[0] < rmax[0] and rmin[1] <= mouse[1] < rmax[1]):
+                continue
+            pm = dpg.get_plot_mouse_pos()
+            if pm is None:
+                continue
+            x = pm[0]
+            try:
+                xmin, xmax = dpg.get_axis_limits(entry["xa"])
+            except Exception:
+                continue
+            tol = (xmax - xmin) * 0.015
+            if tol <= 0:
+                tol = 1e-6
+            lines = []
+            xval = None
+            for s in entry["series"]:
+                xs = s["x"]
+                if len(xs) == 0:
+                    continue
+                idx = int(np.searchsorted(xs, x))
+                best_i, best_d = None, tol
+                for i in (idx - 1, idx):
+                    if 0 <= i < len(xs):
+                        d = abs(float(xs[i]) - x)
+                        if d < best_d:
+                            best_d = d
+                            best_i = i
+                if best_i is not None:
+                    if xval is None:
+                        xval = float(xs[best_i])
+                    lines.append("%s: %s" % (s["label"], s["fmt"] % float(s["y"][best_i])))
+            if not lines or xval is None:
+                continue
+            dpg.set_value("hover_text", entry["xfmt"] % xval + "\n" + "\n".join(lines))
+            dpg.set_item_pos("hover_win", (mouse[0] + 14, mouse[1] + 14))
+            if not dpg.get_item_configuration("hover_win")["show"]:
+                dpg.configure_item("hover_win", show=True)
+            shown = True
+            break
+        if not shown and dpg.get_item_configuration("hover_win")["show"]:
+            dpg.configure_item("hover_win", show=False)
+
+    # ------------------------------------------------------------------
+    # Chart builders
+    # ------------------------------------------------------------------
     def _rebuild(self):
         self.load_counter += 1
         p = "L%d_" % self.load_counter
+        self.hover_plots = []
         for body in ("tab_fps_body", "tab_loads_body", "tab_temps_body", "tab_mem_body"):
             dpg.delete_item(body, children_only=True)
         dpg.delete_item("summary_body", children_only=True)
@@ -716,6 +801,8 @@ class ViewerApp:
                     _scatter(ya, t[mb], fps[mb], "stutter frame", STUTTER_COL)
             for y in (30.0, 60.0):
                 _hthreshold(ya, float(t[0]), float(t[-1]), y, "%d FPS" % y)
+            self._add_hover(plot, xa, "%.2f s",
+                            [{"label": "fps", "x": t[m], "y": fps[m], "fmt": "%.1f FPS"}])
 
         # --- Frametime over time ---
         plot, xa, ya = _new_plot(body, "Frametime (ms) over time", "Time (s)", "Frame time (ms)", height=210)
@@ -730,6 +817,8 @@ class ViewerApp:
             x0, x1 = float(t[0]), float(t[-1])
             for y, lab in zip(STUTTER_MS, STUTTER_LABELS):
                 _hthreshold(ya, x0, x1, y, lab)
+            self._add_hover(plot, xa, "%.2f s",
+                            [{"label": "frametime", "x": t[m], "y": ft[m], "fmt": "%.2f ms"}])
 
         # --- Frametime histogram ---
         plot, xa, ya = _new_plot(body, "Frametime distribution", "Frame time (ms)", "Frame count", height=210)
@@ -751,6 +840,8 @@ class ViewerApp:
                 dpg.bind_item_theme(btag, t0)
                 if 16.667 >= lo:
                     _hthreshold(ya, lo, hi, counts.max() * 0.15, "16.7ms")
+                self._add_hover(plot, xa, "%.2f ms",
+                                [{"label": "frames", "x": centers, "y": counts, "fmt": "%.0f frames"}])
         dpg.pop_container_stack()
 
     def _build_loads_tab(self, p):
@@ -762,24 +853,34 @@ class ViewerApp:
         plot, xa, ya = _new_plot(body, "CPU / GPU load (%)", "Time (s)", "Load (%)", height=240)
         g = cap.metric("gpu_load")
         c = cap.metric("cpu_load")
+        series = []
         if g is not None:
             m = ~np.isnan(g)
             _line(ya, t[m], g[m], "gpu_load", SERIES_COLORS["gpu_load"])
+            series.append({"label": "gpu_load", "x": t[m], "y": g[m], "fmt": "%.0f %%"})
         if c is not None:
             m = ~np.isnan(c)
             _line(ya, t[m], c[m], "cpu_load", SERIES_COLORS["cpu_load"])
-        if (g is not None and np.any(~np.isnan(g))) or (c is not None and np.any(~np.isnan(c))):
+            series.append({"label": "cpu_load", "x": t[m], "y": c[m], "fmt": "%.0f %%"})
+        if series:
             _hthreshold(ya, float(t[0]), float(t[-1]), 90.0, "90% high-load")
+            self._add_hover(plot, xa, "%.2f s", series)
 
         plot, xa, ya = _new_plot(body, "CPU / GPU power (W)", "Time (s)", "Power (W)", height=240)
         g = cap.metric("gpu_power")
         c = cap.metric("cpu_power")
+        series = []
         if g is not None:
             m = ~np.isnan(g)
             _line(ya, t[m], g[m], "gpu_power", SERIES_COLORS["gpu_power"])
+            series.append({"label": "gpu_power", "x": t[m], "y": g[m], "fmt": "%.1f W"})
         if c is not None:
             m = ~np.isnan(c)
             _line(ya, t[m], c[m], "cpu_power", SERIES_COLORS["cpu_power"])
+            series.append({"label": "cpu_power", "x": t[m], "y": c[m], "fmt": "%.1f W"})
+        if series:
+            self._add_hover(plot, xa, "%.2f s", series)
+        dpg.pop_container_stack()
 
         
 
@@ -792,28 +893,37 @@ class ViewerApp:
         plot, xa, ya = _new_plot(body, "Temperatures (C)", "Time (s)", "Temperature (C)", height=240)
         g = cap.metric("gpu_temp")
         c = cap.metric("cpu_temp")
+        series = []
         if g is not None:
             m = ~np.isnan(g)
             _line(ya, t[m], g[m], "gpu_temp", SERIES_COLORS["gpu_temp"])
+            series.append({"label": "gpu_temp", "x": t[m], "y": g[m], "fmt": "%.0f C"})
         if c is not None:
             m = ~np.isnan(c)
             _line(ya, t[m], c[m], "cpu_temp", SERIES_COLORS["cpu_temp"])
+            series.append({"label": "cpu_temp", "x": t[m], "y": c[m], "fmt": "%.0f C"})
         _hthreshold(ya, float(t[0]), float(t[-1]), GPU_THROTTLE_C, "GPU throttle ~%dC" % GPU_THROTTLE_C)
         _hthreshold(ya, float(t[0]), float(t[-1]), CPU_THROTTLE_C, "CPU throttle ~%dC" % CPU_THROTTLE_C)
+        self._add_hover(plot, xa, "%.2f s", series)
 
         plot, xa, ya = _new_plot(body, "Clocks (MHz)", "Time (s)", "MHz", height=240)
         gcc = cap.metric("gpu_core_clock")
         gmc = cap.metric("gpu_mem_clock")
         cm = cap.metric("cpu_mhz", "cpu_core_clock")
+        series = []
         if gcc is not None:
             m = ~np.isnan(gcc)
             _line(ya, t[m], gcc[m], "gpu_core_clock", SERIES_COLORS["gpu_core_clock"])
+            series.append({"label": "gpu_core_clock", "x": t[m], "y": gcc[m], "fmt": "%.0f MHz"})
         if gmc is not None:
             m = ~np.isnan(gmc)
             _line(ya, t[m], gmc[m], "gpu_mem_clock", SERIES_COLORS["gpu_mem_clock"])
+            series.append({"label": "gpu_mem_clock", "x": t[m], "y": gmc[m], "fmt": "%.0f MHz"})
         if cm is not None:
             m = ~np.isnan(cm)
             _line(ya, t[m], cm[m], "cpu_mhz", SERIES_COLORS["cpu_mhz"])
+            series.append({"label": "cpu_mhz", "x": t[m], "y": cm[m], "fmt": "%.0f MHz"})
+        self._add_hover(plot, xa, "%.2f s", series)
         dpg.pop_container_stack()
 
     def _build_mem_tab(self, p):
@@ -823,6 +933,7 @@ class ViewerApp:
         dpg.push_container_stack(body)
 
         plot, xa, ya = _new_plot(body, "Memory usage (GB)", "Time (s)", "GB", height=260)
+        series = []
         for name, label in (("ram_used", "ram_used"), ("gpu_vram_used", "gpu_vram_used"),
                             ("swap_used", "swap_used"), ("process_rss", "process_rss")):
             arr = cap.metric(name)
@@ -831,11 +942,14 @@ class ViewerApp:
             m = ~np.isnan(arr)
             if np.any(m):
                 _line(ya, t[m], arr[m], label, SERIES_COLORS.get(name, (180, 180, 180, 255)))
+                series.append({"label": label, "x": t[m], "y": arr[m], "fmt": "%.2f GB"})
 
         total_kb = self.stats.get("total_ram_kb")
         if total_kb:
             _hthreshold(ya, float(t[0]), float(t[-1]), total_kb / (1024 ** 2),
                         "total RAM %.1fGB" % (total_kb / (1024 ** 2)))
+        if series:
+            self._add_hover(plot, xa, "%.2f s", series)
         dpg.pop_container_stack()
 
         

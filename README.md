@@ -19,6 +19,8 @@ averages and peaks. This tool loads them and turns them into:
 - 📈 **Interactive charts** – FPS & frametime over time (with stutter spikes
   highlighted and 60/30/20 FPS threshold lines), a frametime histogram,
   CPU/GPU load & power, temperatures (with throttle lines), clocks and memory.
+  Hover any chart to get a **cursor-following value readout** (time + every
+  series' value at the nearest sample point).
 - 📊 **Summary & Analysis window** – computed statistics (avg FPS, 0.1%/1% lows,
   97th percentile, stutter counts), the raw MangoHud summary values, a
   **bottleneck verdict** (CPU-bound / GPU-bound / vsync-capped / thermal /
@@ -77,6 +79,8 @@ python frametime_viewer.py path/to/log.csv  # open a specific capture
 - **File → Open log CSV…** loads a capture (companion summary auto-loaded).
 - **File → Open summary CSV…** loads a summary for the current log.
 - **Tabs** – `FPS & Frametime`, `Loads & Power`, `Temps & Clocks`, `Memory`.
+- **Hover tooltips** – move the cursor over any chart for a live readout of all
+  series at the nearest sample time.
 - **Summary & Analysis** window – stats, bottleneck verdict, data-quality notes.
 - **View → Toggle Summary window** – show/hide the analysis window.
 
