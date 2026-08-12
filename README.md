@@ -10,6 +10,8 @@
 
 ---
 
+![Frametime Viewer screenshot](assets/Screenshot%202026-08-12%20175218.png)
+
 ## What it does
 
 Steam Deck's overlay (MangoHud / mangoapp) logs two CSVs per session: a
