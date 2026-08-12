@@ -105,7 +105,3 @@ effectively, and a worked example of interpreting a capture.
 frametime_viewer.py  # the application (parsing, stats, analysis, ImGui UI)
 guide.md             # guide to understanding and reading the captured data
 ```
-
-## License
-
-MIT
